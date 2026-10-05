@@ -28,6 +28,7 @@ Baut ein Höhenfeld (Gelände) als regelmäßiges Raster neu auf: innen nur Vier
 Beide Befehle sind ein Undo-Schritt; die Dialoge blockieren den Viewport nicht (Orbit, Pan, Zoom).
 
 ## Änderungen
+- **1.1** — eigene Werkzeugleiste **Quadrify** mit einem Icon je Befehl (Quadrify… · Grid Remesh…). Sie erscheint in einer eigenen Zeile unter den eingebauten Leisten und lässt sich wie diese verschieben, abdocken oder ausblenden (Rechtsklick auf eine Leiste). Icons im Stil von IngeTrazo, passend zum hellen/dunklen Theme.
 - **1.0** — erste Veröffentlichung.
 
 ## Lizenz

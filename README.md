@@ -28,6 +28,7 @@ Rebuilds a height field (terrain) as a regular grid: quads everywhere inside, bo
 Both commands are one undo step; the dialogs do not block the viewport (orbit, pan, zoom).
 
 ## Changelog
+- **1.1** — own toolbar **Quadrify** with one icon per command (Quadrify… · Grid Remesh…). It starts on a row of its own under the built-in toolbars; move, float or hide it like those (right-click on a toolbar). Icons drawn in IngeTrazo's own style, they follow the light/dark theme.
 - **1.0** — first release.
 
 ## Licence

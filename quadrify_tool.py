@@ -39,7 +39,7 @@ from __future__ import annotations
 import math
 
 KEY = "quadrify_tool"
-VERSION = "1.1"
+VERSION = "1.2"
 TITLE = "Quadrify"
 
 _TEXTS = {
@@ -63,6 +63,7 @@ _TEXTS = {
         "Hide diagonal": "Diagonale ausblenden",
         "Keep triangles": "Dreiecke behalten",
         "Compare materials": "Materialien vergleichen",
+        "Back to the default settings.": "Zurück zu den Standardwerten.",
         "Preview": "Vorschau",
         "Result": "Ergebnis",
         "{q} quad faces · {s} curved quads · {t} triangles left":
@@ -134,6 +135,7 @@ _TEXTS = {
         "Hide diagonal": "Ocultar diagonal",
         "Keep triangles": "Mantener triángulos",
         "Compare materials": "Comparar materiales",
+        "Back to the default settings.": "Volver a los valores por defecto.",
         "Preview": "Vista previa",
         "Result": "Resultado",
         "{q} quad faces · {s} curved quads · {t} triangles left":
@@ -601,13 +603,156 @@ def _draw_preview(viewport, painter) -> None:
             painter.drawLines(lines)
 
 
+def _live_mixin():
+    """The PESI3D Live Preview, shared by the Quadrify and Grid Remesh
+    dialogs: a checkable «Preview» (green «● Live Preview ON»), «Reset»,
+    «OK», «Cancel» and a banner. Switched on, the result stands in the model
+    as ONE undo step (``SnapshotImport``) and is rebuilt on every change —
+    undone first, so the plan always sees the source as it was; OK keeps
+    it, Cancel takes it back. The dialog's own changes to the selection and
+    the mesh are remembered, so «Follow selection» never reads them as the
+    user's."""
+    from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton
+
+    class LiveMixin:
+        _PV_ON = ("QPushButton { background: #2e9e4f; color: white; "
+                  "font-weight: bold; border: 1px solid #1f7a3a; "
+                  "border-radius: 3px; padding: 3px 8px; }")
+        _BANNER = {"live": "background: #1f5f33; color: #e8ffe9;",
+                   "busy": "background: #7a5a12; color: #fff6e0;",
+                   "paused": "background: #5c4a1a; color: #ffe9b8;",
+                   "error": "background: #7a1f1f; color: #ffecec;"}
+
+        def _live_build(self, lay):
+            self._pv_cmd = None
+            self._pv_key = None
+            self._pv_src_sel = []
+            self._kept = False
+            self.pv_lbl = QLabel(self)
+            self.pv_lbl.setWordWrap(True)
+            self.pv_lbl.setVisible(False)
+            lay.addWidget(self.pv_lbl)
+            row = QHBoxLayout()
+            self.preview = QPushButton("Preview", self)
+            self.preview.setCheckable(True)
+            self.reset_btn = QPushButton("Reset", self)
+            self.reset_btn.setToolTip(_tr("Back to the default settings."))
+            self.b_ok = QPushButton("OK", self)
+            self.b_ok.setDefault(True)
+            self.cancel_btn = QPushButton("Cancel", self)
+            row.addWidget(self.preview)
+            row.addWidget(self.reset_btn)
+            row.addStretch(1)
+            row.addWidget(self.b_ok)
+            row.addWidget(self.cancel_btn)
+            lay.addLayout(row)
+            self.preview.toggled.connect(self._live_toggled)
+            self.reset_btn.clicked.connect(self._reset)
+            self.b_ok.clicked.connect(self._apply)
+            self.cancel_btn.clicked.connect(self.close)
+            self._live_style(False)
+
+        def _banner(self, kind, text):
+            self.pv_lbl.setStyleSheet(self._BANNER[kind]
+                                      + " padding: 6px 8px; border-radius: 3px;")
+            self.pv_lbl.setText(text)
+            self.pv_lbl.setVisible(True)
+
+        def _live_style(self, on):
+            if on:
+                self.preview.setText("● Live Preview ON")
+                self.preview.setStyleSheet(self._PV_ON)
+                self.preview.setToolTip("The preview follows every change by "
+                                        "itself — click to switch it off.")
+            else:
+                self.preview.setText("Preview")
+                self.preview.setStyleSheet("")
+                self.preview.setToolTip("Show the result in the model; it then "
+                                        "follows every change by itself.")
+                self.pv_lbl.setVisible(False)
+
+        def _live_toggled(self, on):
+            self._live_style(on)
+            self._timer.stop()
+            self._refresh()
+
+        def _live_quiet(self):
+            """Our own change of selection / mesh: not the user's."""
+            self._sig = self._selection_sig()
+            self._serial = self._mesh_serial()
+
+        def _live_undo(self, restore=True):
+            """Take the preview back (if it is still the last step). The
+            source's selection comes back unless ``restore`` is False."""
+            cmd, self._pv_cmd = self._pv_cmd, None
+            self._pv_key = None
+            if cmd is None:
+                return
+            vp = self.viewport
+            stack = getattr(vp.history, "undo_stack", [])
+            if stack and stack[-1] is cmd:
+                vp.history.undo()
+                vp.notify_scene_changed()
+                if restore:
+                    sc = vp.scene
+                    alive = set(sc.mesh.faces) | set(sc.mesh.edges)
+                    sc.selection.clear()
+                    sc.selection.update(x for x in self._pv_src_sel if x in alive)
+            self._live_quiet()
+            vp.update()
+
+        def _live_apply(self, mutate, key, select_fn):
+            """Run ``mutate(scene)`` as the preview step; ``select_fn(result)``
+            → what to select (the result faces)."""
+            from core.history import SnapshotImport
+            vp = self.viewport
+            self._pv_src_sel = list(vp.scene.selection)
+            result = {}
+
+            def run(sc):
+                result.update(mutate(sc) or {})
+
+            cmd = SnapshotImport(run)
+            vp.history.execute(cmd)
+            err = getattr(vp.history, "last_error", None)
+            if err:
+                self._banner("error", f"Preview failed: {str(err).split(': ', 1)[-1]}")
+                self._live_quiet()
+                return None
+            vp.notify_scene_changed()
+            self._pv_cmd, self._pv_key = cmd, key
+            try:
+                now = set(vp.scene.mesh.faces)
+                vp.scene.select([f for f in select_fn(result) if f in now])
+            except Exception:  # noqa: BLE001
+                pass
+            self._live_quiet()
+            vp.update()
+            return result
+
+        def _live_keep(self, key) -> bool:
+            """OK with an up-to-date preview: it IS the result (one undo
+            step already)."""
+            cmd = self._pv_cmd
+            stack = getattr(self.viewport.history, "undo_stack", [])
+            if cmd is None or self._pv_key != key or not stack or stack[-1] is not cmd:
+                return False
+            self._pv_cmd = None
+            self._kept = True
+            return True
+
+    return LiveMixin
+
+
 def _make_dialog_class():
     from PySide6.QtCore import Qt, QTimer
     from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog,
                                    QDoubleSpinBox, QFormLayout, QHBoxLayout,
                                    QLabel, QPushButton, QVBoxLayout)
 
-    class QuadrifyDialog(QDialog):
+    Live = _live_mixin()
+
+    class QuadrifyDialog(Live, QDialog):
         def __init__(self, viewport):
             super().__init__(viewport.window())
             self.viewport = viewport
@@ -628,7 +773,10 @@ def _make_dialog_class():
             self._poll.setInterval(400)
             self._poll.timeout.connect(self._poll_state)
             self._poll.start()
-            self._refresh()
+            if self.p["preview"]:
+                self.preview.setChecked(True)     # → the first preview
+            else:
+                self._refresh()
 
         # ---- UI ------------------------------------------------------------
         def _spin(self, lo, hi, dec, val, tip):
@@ -680,10 +828,6 @@ def _make_dialog_class():
             self.c_mat.setChecked(self.p["materials"])
             self.c_mat.toggled.connect(self._changed)
             form.addRow("", self.c_mat)
-            self.c_prev = QCheckBox(_tr("Preview"), self)
-            self.c_prev.setChecked(self.p["preview"])
-            self.c_prev.toggled.connect(self._changed)
-            form.addRow("", self.c_prev)
             self.result = QLabel(self)
             self.result.setWordWrap(True)
             form.addRow(_tr("Result"), self.result)
@@ -691,19 +835,13 @@ def _make_dialog_class():
             brow = QHBoxLayout()
             self.b_sel = QPushButton(_tr("Select Edges"), self)
             self.b_sel.clicked.connect(self._select_edges)
-            self.b_ok = QPushButton(_tr("Quadrify"), self)
-            self.b_ok.setDefault(True)
-            self.b_ok.clicked.connect(self._apply)
-            b_cancel = QPushButton(_tr("Cancel"), self)
-            b_cancel.clicked.connect(self.close)
             brow.addWidget(self.b_sel)
             self.b_left = QPushButton(_tr("Select Triangles Left"), self)
             self.b_left.clicked.connect(self._select_left)
             brow.addWidget(self.b_left)
             brow.addStretch(1)
-            brow.addWidget(self.b_ok)
-            brow.addWidget(b_cancel)
             lay.addLayout(brow)
+            self._live_build(lay)
 
         def _params(self):
             p = dict(self.p)
@@ -712,12 +850,32 @@ def _make_dialog_class():
             p["planar_tol"] = self.s_planar.value()
             p["curved"] = self.c_curved.currentData()
             p["materials"] = self.c_mat.isChecked()
-            p["preview"] = self.c_prev.isChecked()
+            p["preview"] = self.preview.isChecked()
             p["follow"] = self.follow.isChecked()
             return p
 
+        def _state_key(self, p):
+            return (tuple(id(f) for f in self.faces), round(p["face_angle"], 6),
+                    round(p["shape_angle"], 6), round(p["planar_tol"], 6),
+                    p["curved"], p["materials"], p.get("maximize"))
+
         def _changed(self, *_a):
+            if self.preview.isChecked():
+                self._banner("busy", "⟳ Updating the preview…")
             self._timer.start()
+
+        def _reset(self):
+            d = DEFAULTS
+            for w in (self.s_face, self.s_shape, self.s_planar, self.c_curved, self.c_mat):
+                w.blockSignals(True)
+            self.s_face.setValue(d["face_angle"])
+            self.s_shape.setValue(d["shape_angle"])
+            self.s_planar.setValue(d["planar_tol"])
+            self.c_curved.setCurrentIndex(max(0, self.c_curved.findData(d["curved"])))
+            self.c_mat.setChecked(d["materials"])
+            for w in (self.s_face, self.s_shape, self.s_planar, self.c_curved, self.c_mat):
+                w.blockSignals(False)
+            self._changed()
 
         # ---- selection / document following --------------------------------
         def _selection_sig(self):
@@ -757,11 +915,19 @@ def _make_dialog_class():
             sel = list(sc.selection)
             if only_if_faces and sel and not any(isinstance(x, Face) for x in sel):
                 return
+            if self._pv_cmd is not None:
+                # the source as it was, with the user's new selection on it
+                self._live_undo(restore=False)
+                alive = set(sc.mesh.faces) | set(sc.mesh.edges)
+                sc.selection.clear()
+                sc.selection.update(x for x in sel if x in alive)
+                self._live_quiet()
             self.faces, self.from_sel = scope_faces(sc)
             self._refresh()
 
         # ---- plan + preview ----------------------------------------------------
         def _refresh(self):
+            self._live_undo()
             p = self._params()
             mesh = self.viewport.scene.mesh
             live = set(mesh.faces)
@@ -788,18 +954,34 @@ def _make_dialog_class():
                 text += "\n" + _tr("Tip: raise «Max shape angle» (up to 90°) "
                                     "for irregular meshes such as terrain.")
             self.result.setText(text)
-            if p["preview"]:
+            _STATE["preview"] = None
+            if p["preview"] and pl["pairs"]:
+                pairs = pl["pairs"]
+                gone = {f for pr in pairs if pr[4] == "merge" for f in (pr[1], pr[2])}
+                keep = [f for f in self.faces if f not in gone] if self.from_sel else []
+                res = self._live_apply(
+                    lambda sc: apply_plan(sc.mesh, pairs), self._state_key(p),
+                    lambda r: keep + (r.get("faces", []) if self.from_sel else []))
+                if res is not None:
+                    self._banner("live", f"● <b>LIVE PREVIEW</b> — {res.get('merged', 0)} "
+                                 f"quad faces, {res.get('softened', 0)} curved quads · "
+                                 f"changes apply instantly")
+            elif p["preview"]:
+                self._banner("live", "● <b>LIVE PREVIEW</b> — nothing to quadrify "
+                             "in the scope")
+            else:
+                # preview off: the plan drawn over the model
                 merge, soft = [], []
                 for e, *_r, kind, _fl in pl["pairs"]:
                     seg = (_v(e.v0.position), _v(e.v1.position))
                     (merge if kind == "merge" else soft).append(seg)
                 _STATE["preview"] = {"merge": merge, "soft": soft}
-            else:
-                _STATE["preview"] = None
             self.viewport.update()
 
         # ---- actions -------------------------------------------------------------
         def _select_edges(self):
+            if self.preview.isChecked():
+                self.preview.setChecked(False)     # the diagonals are merged away
             if not self._plan or not self._plan["pairs"]:
                 return
             edges = [pr[0] for pr in self._plan["pairs"]]
@@ -823,8 +1005,19 @@ def _make_dialog_class():
             p = self._params()
             self.p = p
             save_params(p)
+            if self._live_keep(self._state_key(p)):
+                pl = self._plan or {"pairs": []}
+                q = sum(1 for pr in pl["pairs"] if pr[4] == "merge")
+                self.viewport.flash_status(_tr(
+                    "Quadrified: {q} quad faces, {s} curved quads",
+                    q=q, s=len(pl["pairs"]) - q), 5000)
+                _STATE["preview"] = None
+                self.close()
+                return
+            self._live_undo()
             faces, from_sel = list(self.faces), self.from_sel
             _STATE["preview"] = None
+            self._kept = True                  # nothing left to take back
             self.close()
             run_quadrify(self.viewport, faces, p, from_sel)
 
@@ -834,6 +1027,8 @@ def _make_dialog_class():
                 self._timer.stop()
                 self.p = self._params()
                 save_params(self.p)
+                if not self._kept:
+                    self._live_undo()          # Cancel: the preview goes
             except Exception:  # noqa: BLE001
                 pass
             _STATE["preview"] = None
@@ -1502,7 +1697,9 @@ def _make_grid_dialog_class():
                                    QDoubleSpinBox, QFormLayout, QHBoxLayout,
                                    QLabel, QPushButton, QVBoxLayout)
 
-    class GridDialog(QDialog):
+    Live = _live_mixin()
+
+    class GridDialog(Live, QDialog):
         def __init__(self, viewport):
             super().__init__(viewport.window())
             self.viewport = viewport
@@ -1525,7 +1722,10 @@ def _make_grid_dialog_class():
             self._poll.setInterval(400)
             self._poll.timeout.connect(self._poll_state)
             self._poll.start()
-            self._refresh()
+            if self.p["preview"]:
+                self.preview.setChecked(True)     # → the first preview
+            else:
+                self._refresh()
 
         def _build(self):
             lay = QVBoxLayout(self)
@@ -1584,24 +1784,11 @@ def _make_grid_dialog_class():
             self.s_planar.valueChanged.connect(self._changed)
             form.addRow(_tr("Planar tolerance"), self.s_planar)
 
-            self.c_prev = QCheckBox(_tr("Preview"), self)
-            self.c_prev.setChecked(self.p["preview"])
-            self.c_prev.toggled.connect(self._changed)
-            form.addRow("", self.c_prev)
             self.result = QLabel(self)
             self.result.setWordWrap(True)
             form.addRow(_tr("Result"), self.result)
             lay.addLayout(form)
-            brow = QHBoxLayout()
-            brow.addStretch(1)
-            self.b_ok = QPushButton(_tr("Remesh"), self)
-            self.b_ok.setDefault(True)
-            self.b_ok.clicked.connect(self._apply)
-            b_cancel = QPushButton(_tr("Cancel"), self)
-            b_cancel.clicked.connect(self.close)
-            brow.addWidget(self.b_ok)
-            brow.addWidget(b_cancel)
-            lay.addLayout(brow)
+            self._live_build(lay)
 
         def _params(self):
             p = dict(self.p)
@@ -1609,12 +1796,26 @@ def _make_grid_dialog_class():
             p["angle"] = self.s_angle.value()
             p["clip"] = bool(self.c_border.currentData())
             p["planar_tol"] = self.s_planar.value()
-            p["preview"] = self.c_prev.isChecked()
+            p["preview"] = self.preview.isChecked()
             p["follow"] = self.follow.isChecked()
             return p
 
         def _changed(self, *_a):
+            if self.preview.isChecked():
+                self._banner("busy", "⟳ Updating the preview…")
             self._timer.start()
+
+        def _reset(self):
+            d = GRID_DEFAULTS
+            for w in (self.s_space, self.s_angle, self.c_border, self.s_planar):
+                w.blockSignals(True)
+            self.s_space.setValue((d["spacing_m"] or auto_spacing(self.faces)) / self.scale)
+            self.s_angle.setValue(d["angle"])
+            self.c_border.setCurrentIndex(0 if d["clip"] else 1)
+            self.s_planar.setValue(d["planar_tol"])
+            for w in (self.s_space, self.s_angle, self.c_border, self.s_planar):
+                w.blockSignals(False)
+            self._changed()
 
         def _selection_sig(self):
             try:
@@ -1646,19 +1847,29 @@ def _make_grid_dialog_class():
 
         def _read_selection(self, only_if_faces):
             from core.mesh import Face
-            sel = list(self.viewport.scene.selection)
+            sc = self.viewport.scene
+            sel = list(sc.selection)
             if only_if_faces and sel and not any(isinstance(x, Face) for x in sel):
                 return
-            self.faces, self.from_sel = scope_faces(self.viewport.scene)
+            if self._pv_cmd is not None:
+                self._live_undo(restore=False)
+                alive = set(sc.mesh.faces) | set(sc.mesh.edges)
+                sc.selection.clear()
+                sc.selection.update(x for x in sel if x in alive)
+                self._live_quiet()
+            self.faces, self.from_sel = scope_faces(sc)
             self._gp_key = None
             self._refresh()
 
         def _key(self, p):
-            return (tuple(id(f) for f in self.faces), self._mesh_serial(),
+            # the source faces come back as the same objects after the
+            # preview is undone: no mesh serial here (the preview changes it)
+            return (tuple(id(f) for f in self.faces),
                     round(p["spacing_m"], 9), round(p["angle"], 6), p["clip"],
                     round(p["planar_tol"], 6))
 
         def _refresh(self):
+            self._live_undo()
             p = self._params()
             mesh = self.viewport.scene.mesh
             live = set(mesh.faces)
@@ -1689,20 +1900,39 @@ def _make_grid_dialog_class():
                                        "needs a height field such as terrain.")
             self.result.setText(text)
             self.b_ok.setEnabled(ok)
+            _STATE["grid_preview"] = None
             if p["preview"] and ok:
+                faces = list(self.faces)
+                res = self._live_apply(
+                    lambda sc: apply_grid(sc.mesh, faces, gp), self._key(p),
+                    lambda r: r.get("faces", []) if self.from_sel else [])
+                if res is not None:
+                    self._banner("live", f"● <b>LIVE PREVIEW</b> — {gp['full']} quads, "
+                                 f"{gp['border']} border pieces · changes apply instantly")
+            elif p["preview"]:
+                self._banner("paused", f"⏸ <b>Preview paused</b> — {text}")
+            elif ok:
                 _STATE["grid_preview"] = {"segs": _grid_segments(gp)}
-            else:
-                _STATE["grid_preview"] = None
             self.viewport.update()
 
         def _apply(self):
             p = self._params()
             self.p = p
             save_grid_params(p)
+            if self._live_keep(self._key(p)):
+                gp = self._gp
+                self.viewport.flash_status(_tr("Grid Remesh: {q} quads, {b} border pieces",
+                                               q=gp["full"], b=gp["border"]), 5000)
+                _STATE["grid_preview"] = None
+                self.close()
+                return
+            self._live_undo()
             if self._key(p) != self._gp_key:
-                self._refresh()
+                self._gp = grid_plan(self.faces, p) if self.faces else None
+                self._gp_key = self._key(p)
             gp, faces = self._gp, list(self.faces)
             _STATE["grid_preview"] = None
+            self._kept = True
             self.close()
             run_grid(self.viewport, faces, gp)
 
@@ -1712,6 +1942,8 @@ def _make_grid_dialog_class():
                 self._timer.stop()
                 self.p = self._params()
                 save_grid_params(self.p)
+                if not self._kept:
+                    self._live_undo()          # Cancel: the preview goes
             except Exception:  # noqa: BLE001
                 pass
             _STATE["grid_preview"] = None

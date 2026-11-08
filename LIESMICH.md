@@ -11,7 +11,7 @@ Wandelt triangulierte Netze (OBJ, STL, DAE, glTF, Gelände) in **viereckige Flä
 2. `quadrify_tool.py` in diesen Ordner kopieren.
 3. IngeTrazo neu starten → **Extensions ▸ Quadrify ▸** *Quadrify… · Grid Remesh…* (auch im Rechtsklick-Menü, wenn Flächen gewählt sind).
 
-Benötigt IngeTrazo ≥ 0.5.6 (Extension-API 2) · getestet mit IngeTrazo 0.5.8.
+Benötigt IngeTrazo ≥ 0.5.6 (Extension-API 2) · getestet mit IngeTrazo 0.6.0.
 
 ## Quadrify…
 Entfernt die Diagonale zwischen zwei Dreiecken überall dort, wo sie ein gutes Viereck ergeben. Arbeitet mit den gewählten Flächen oder — ohne Auswahl — mit dem ganzen gerade bearbeiteten Netz (Gruppe vorher öffnen).
@@ -24,11 +24,22 @@ Entfernt die Diagonale zwischen zwei Dreiecken überall dort, wo sie ein gutes V
 - **Follow selection** / **↻ Read selection**: bei offenem Dialog andere Flächen wählen, die Vorschau wandert mit.
 
 ## Grid Remesh…
-Baut ein Höhenfeld (Gelände) als regelmäßiges Raster neu auf: innen nur Vierecke, Randzellen am Umriss beschnitten (*Clip to outline*) oder weggelassen (*Whole cells only*). Die Höhen werden von der alten Fläche abgetastet. **Spacing**, **Grid angle** (*Auto* dreht das Raster entlang des Geländes), **Planar tolerance**; Live Preview, Follow selection, Reset, OK, Cancel wie bei Quadrify….
+Baut Flächen als regelmäßiges Raster neu auf. **Surface**: *Height field* legt das Raster von oben gesehen (Gelände); *Any shape* erzeugt **nur Vierecke** wie eine Retopologie: die Fläche wird an harten Kanten in Stücke geteilt, jedes Stück bekommt ein geordnetes Viereck-Raster, das genau an seinem Umriss endet — vier Ecken: Raster (gegenüberliegende Seiten gleich viele Vierecke); rund: O-Raster (Quadrat innen, Ringe außen); Röhre zwischen zwei Umrissen (Kanal, Übergang Rechteck→Kreis): Ringe von Umriss zu Umriss. Nachbarstücke teilen ihre Kantenpunkte, das Ergebnis ist geschlossen. Stücke mit Löchern oder mehr als vier Ecken bekommen das beschnittene Raster; *Auto* nimmt das Höhenfeld, wo die Flächen eines sind, sonst jede Form. In jedem Stück: innen nur Vierecke, Randzellen am Umriss beschnitten (*Clip to outline*) oder weggelassen (*Whole cells only*). Die Höhen werden von der alten Fläche abgetastet. **Spacing**, **Grid angle** (*Auto* dreht das Raster entlang des Geländes), **Planar tolerance**; Live Preview, Follow selection, Reset, OK, Cancel wie bei Quadrify….
 
 Beide Befehle sind ein Undo-Schritt; die Dialoge blockieren den Viewport nicht (Orbit, Pan, Zoom).
 
+## Einheiten
+Der Dialog arbeitet in den **Einheiten des geöffneten Dokuments** — eingestellt in IngeTrazo unter **Fenster ▸ Einheiten…** (Strg+U) oder **Fenster ▸ Einstellungen… ▸ Einheiten**:
+- Längenfelder zeigen und lesen die Längeneinheit und -form des Dokuments: m, cm, mm, in, ft, Fuß-Zoll (`9'10"`) oder Fuß-Zoll mit Brüchen (`9'10 1/8"`).
+- Eingabe mit oder ohne Einheit: `25`, `2,5 cm`, `1'2"`, `3/4"`. Eine Zahl ohne Einheit gilt in der Dokumenteinheit (im Fuß-Zoll-Dokument: Zoll); ein Wert in einer anderen Einheit wird umgerechnet.
+- Winkel stehen in der Winkeleinheit des Dokuments (Grad, Radiant oder Gon), Flächen in seiner Flächeneinheit; Prozentfelder und Anzahlen haben keine Einheit. Das Dezimaltrennzeichen folgt dem Dokument — beim Tippen gehen `.` und `,`.
+- Ein Wechsel der Einheiten ändert nur Anzeige und Eingabe — das Modell bleibt exakt gleich. Nach dem Ändern den Dialog neu öffnen.
+- In IngeTrazo-Versionen vor 0.5.8 sind die Felder einfache Zahlen in Metern.
+- **Raster-Neuvernetzung…** (Grid Remesh): die **Rasterweite** ist eine Länge in der Dokumenteinheit; ein sehr kleines Raster auf einem großen Modell warnt vor der langen Berechnung (der Dialog geht zuerst auf).
+- **Max. Flächenwinkel**, **Max. Formwinkel**, **Rasterwinkel** und **Planar-Toleranz** sind Winkel in der Winkeleinheit des Dokuments.
+
 ## Änderungen
+- **1.3** — **Grid Remesh für jede Form**: neue Einstellung **Surface** — *Height field* (Gelände, von oben), *Any shape* (**nur Vierecke** wie eine Retopologie: Stücke an harten Kanten, je ein geordnetes Viereck-Raster — Raster, O-Raster oder Ringe — lückenlos verbunden; Kanäle, Übergänge Rechteck→Kreis, Wände, Kisten) oder *Auto*. **Dokumenteinheiten** in allen Feldern (Rasterweite, Winkel). Getestet mit IngeTrazo 0.6.0.
 - **1.2** — die PESI3D-Live-Vorschau in beiden Dialogen: das echte Ergebnis im Modell als ein Undo-Schritt (Knopf *● Live Preview ON*, Banner, *Reset*, *OK* übernimmt die Vorschau, *Cancel* nimmt sie zurück). Getestet mit IngeTrazo 0.5.8.
 - **1.1** — eigene Werkzeugleiste **Quadrify** mit einem Icon je Befehl (Quadrify… · Grid Remesh…). Sie erscheint in einer eigenen Zeile unter den eingebauten Leisten und lässt sich wie diese verschieben, abdocken oder ausblenden (Rechtsklick auf eine Leiste). Icons im Stil von IngeTrazo, passend zum hellen/dunklen Theme.
 - **1.0** — erste Veröffentlichung.
